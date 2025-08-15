@@ -1,11 +1,12 @@
 module github.com/IguteChung/casbin-psql-watcher
 
-go 1.19
+go 1.23.5
 
 require (
 	github.com/casbin/casbin/v2 v2.58.0
 	github.com/google/uuid v1.3.0
 	github.com/jackc/pgx/v5 v5.1.1
+	github.com/sethvargo/go-retry v0.3.0
 )
 
 require (

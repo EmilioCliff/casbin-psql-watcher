@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/casbin/casbin/v2"
 	"github.com/casbin/casbin/v2/model"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/sethvargo/go-retry"
 )
 
 // Watcher implements casbin Watcher and WatcherEX to sync multiple casbin enforcer.
@@ -77,11 +79,27 @@ func NewWatcherWithPool(ctx context.Context, pool *pgxpool.Pool, opt Option) (*W
 
 	// start listen.
 	go func() {
-		if err := w.listenMessage(listenerCtx); err == context.Canceled {
-			log.Println("[psqlwatcher] watcher closed")
-		} else if err != nil {
-			log.Printf("[psqlwatcher] failed to listen message: %v\n", err)
+		b := retry.NewFibonacci(200 * time.Millisecond)
+
+		b = retry.WithCappedDuration((5 * time.Second), b)
+
+		if err := retry.Do(listenerCtx, b, func(ctx context.Context) error {
+			if err := w.listenMessage(listenerCtx); err == context.Canceled {
+				log.Println("[psqlwatcher] watcher closed")
+
+				return nil // context canceled, exit the loop
+			} else if err != nil {
+				log.Printf("[psqlwatcher] failed to listen message: %v\n", err)
+
+				return retry.RetryableError(err)
+			}
+
+			return nil
+		}); err != nil {
+			log.Printf("[psqlwatcher] listener stopped with error: %v\n", err)
 		}
+
+		log.Println("[psqlwatcher] listener exited")
 	}()
 
 	return w, nil
@@ -310,7 +328,11 @@ func (w *Watcher) listenMessage(ctx context.Context) error {
 		// if NotifySelf is enabled, will callback when id is same.
 		w.RLock()
 		if m.ID != w.GetLocalID() || w.GetNotifySelf() {
-			w.callback(notification.Payload)
+			if w.callback != nil {
+				w.callback(notification.Payload)
+			} else {
+				log.Println("[psqlwatcher] callback is not set, skipping update")
+			}
 		}
 		w.RUnlock()
 	}
